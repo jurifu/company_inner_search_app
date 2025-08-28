@@ -117,26 +117,27 @@ def initialize_retriever():
         doc.page_content = adjust_string(doc.page_content)
         for key in doc.metadata:
             doc.metadata[key] = adjust_string(doc.metadata[key])
-    
+
     # 埋め込みモデルの用意
     embeddings = OpenAIEmbeddings()
-    
-    # チャンク分割用のオブジェクトを作成
-    # 2025/08/27 【問題2】マジックナンバー排除（チャンクサイズ・オーバーラップ）
+
+    # 社員名簿.csvのみ分割せず、他は分割
     text_splitter = CharacterTextSplitter(
         chunk_size=ct.CHUNK_SIZE,
         chunk_overlap=ct.CHUNK_OVERLAP,
         separator="\n"
     )
-
-    # チャンク分割を実施
-    splitted_docs = text_splitter.split_documents(docs_all)
+    splitted_docs = []
+    for doc in docs_all:
+        if "社員名簿.csv" in str(doc.metadata.get("source", "")):
+            splitted_docs.append(doc)
+        else:
+            splitted_docs.extend(text_splitter.split_documents([doc]))
 
     # ベクターストアの作成
     db = Chroma.from_documents(splitted_docs, embedding=embeddings)
 
     # ベクターストアを検索するRetrieverの作成
-    # 2025/08/27 【問題2】マジックナンバー排除（関連ドキュメント数）
     st.session_state.retriever = db.as_retriever(search_kwargs={"k": ct.RETRIEVER_TOP_K})
 
 
@@ -214,7 +215,22 @@ def file_load(path, docs_all):
     # ファイル名（拡張子を含む）を取得
     file_name = os.path.basename(path)
 
-    # 想定していたファイル形式の場合のみ読み込む
+    # 社員名簿.csvを特別扱い
+    if file_name == "社員名簿.csv":
+        import csv
+        with open(path, encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = [row for row in reader]
+        # 1ドキュメント化（Markdown形式で見やすく、全項目列挙）
+        content = "### 全従業員一覧\n"
+        for row in rows:
+            content += "- " + ", ".join([f"{key}: {row[key]}" for key in row.keys()]) + "\n"
+        from langchain.schema import Document
+        doc = Document(page_content=content, metadata={"source": path})
+        docs_all.append(doc)
+        return
+
+    # 通常のファイル読み込み
     if file_extension in ct.SUPPORTED_EXTENSIONS:
         # ファイルの拡張子に合ったdata loaderを使ってデータ読み込み
         loader = ct.SUPPORTED_EXTENSIONS[file_extension](path)
